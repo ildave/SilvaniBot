@@ -5,7 +5,7 @@ rem Move to project folder (folder where this .bat is located)
 cd /d "%~dp0"
 
 rem Set environment variables for this command session only
-set "MASTODON_API_BASE_URL=https://mastodon.social"
+set "MASTODON_API_BASE_URL=https://mastodon.example"
 set "MASTODON_ACCESS_TOKEN=INSERISCI_IL_TUO_TOKEN"
 
 if "%MASTODON_ACCESS_TOKEN%"=="INSERISCI_IL_TUO_TOKEN" (
