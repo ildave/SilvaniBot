@@ -1,2 +1,3 @@
 Pillow
 Mastodon.py
+python-dotenv

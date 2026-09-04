@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 from PIL import Image, ImageFont
@@ -34,7 +35,7 @@ class TestMastodonBot(unittest.TestCase):
             with self.assertRaises(ValueError):
                 mastodon_bot.choose_random_profession(professions)
 
-    def test_choose_random_unused_profession_writes_in_usati(self) -> None:
+    def test_choose_random_unused_profession_does_not_write_in_usati(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             professions = Path(tmpdir) / "professioni.txt"
             used = Path(tmpdir) / "usati.txt"
@@ -46,6 +47,15 @@ class TestMastodonBot(unittest.TestCase):
                 chosen = mastodon_bot.choose_random_unused_profession(professions, used)
 
             self.assertEqual(chosen, "falegname")
+            self.assertEqual(used.read_text(encoding="utf-8"), "idraulico")
+
+    def test_mark_profession_as_used_appends_with_newline(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            used = Path(tmpdir) / "usati.txt"
+            used.write_text("idraulico", encoding="utf-8")
+
+            mastodon_bot.mark_profession_as_used(used, "falegname")
+
             self.assertEqual(used.read_text(encoding="utf-8"), "idraulico\nfalegname")
 
     def test_choose_random_unused_profession_raises_when_exhausted(self) -> None:
@@ -136,6 +146,88 @@ class TestMastodonBot(unittest.TestCase):
                         api_base_url="https://mastodon.example",
                         access_token="token",
                     )
+
+    def test_run_marks_word_as_used_only_after_success(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            professions = tmp / "professioni.txt"
+            used = tmp / "usati.txt"
+            base_image = tmp / "base.jpg"
+            output_dir = tmp / "output"
+
+            professions.write_text("idraulico\nfalegname\n", encoding="utf-8")
+            used.write_text("idraulico", encoding="utf-8")
+            base_image.write_bytes(b"fake")
+
+            config = mastodon_bot.BotConfig(
+                professions_file=professions,
+                used_words_file=used,
+                base_image=base_image,
+                output_dir=output_dir,
+                env_file=tmp / ".env",
+            )
+
+            with patch("mastodon_bot.load_dotenv"), patch(
+                "mastodon_bot.get_required_env_var", side_effect=["https://mastodon.example", "token"]
+            ), patch("mastodon_bot.render_image_with_text"), patch("mastodon_bot.post_toot_with_media"), patch(
+                "mastodon_bot.random.choice", return_value="falegname"
+            ):
+                mastodon_bot.run(config)
+
+            self.assertEqual(used.read_text(encoding="utf-8"), "idraulico\nfalegname")
+
+    def test_run_does_not_mark_word_as_used_if_post_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            professions = tmp / "professioni.txt"
+            used = tmp / "usati.txt"
+            base_image = tmp / "base.jpg"
+            output_dir = tmp / "output"
+
+            professions.write_text("idraulico\nfalegname\n", encoding="utf-8")
+            used.write_text("idraulico", encoding="utf-8")
+            base_image.write_bytes(b"fake")
+
+            config = mastodon_bot.BotConfig(
+                professions_file=professions,
+                used_words_file=used,
+                base_image=base_image,
+                output_dir=output_dir,
+                env_file=tmp / ".env",
+            )
+
+            with patch("mastodon_bot.load_dotenv"), patch(
+                "mastodon_bot.get_required_env_var", side_effect=["https://mastodon.example", "token"]
+            ), patch("mastodon_bot.render_image_with_text"), patch(
+                "mastodon_bot.post_toot_with_media", side_effect=RuntimeError("publish failed")
+            ), patch("mastodon_bot.random.choice", return_value="falegname"):
+                with self.assertRaises(RuntimeError):
+                    mastodon_bot.run(config)
+
+            self.assertEqual(used.read_text(encoding="utf-8"), "idraulico")
+
+    def test_main_returns_zero_on_success(self) -> None:
+        with patch("mastodon_bot.run"):
+            exit_code = mastodon_bot.main()
+
+        self.assertEqual(exit_code, 0)
+
+    def test_main_handles_expected_error(self) -> None:
+        stderr = StringIO()
+        with patch("mastodon_bot.run", side_effect=ValueError("bad config")), patch("sys.stderr", stderr):
+            exit_code = mastodon_bot.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Errore: bad config", stderr.getvalue())
+
+    def test_main_handles_unexpected_error_with_traceback(self) -> None:
+        stderr = StringIO()
+        with patch("mastodon_bot.run", side_effect=RuntimeError("boom")), patch("sys.stderr", stderr):
+            exit_code = mastodon_bot.main()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Errore inatteso: boom", stderr.getvalue())
+        self.assertIn("Traceback", stderr.getvalue())
 
 
 if __name__ == "__main__":

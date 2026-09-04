@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import os
 import random
+import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
 from mastodon import Mastodon
+from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -15,6 +18,7 @@ class BotConfig:
     used_words_file: Path = Path("usati.txt")
     base_image: Path = Path("silvani.jpg")
     output_dir: Path = Path("output")
+    env_file: Path = Path(".env")
     mastodon_api_base_url_env: str = "MASTODON_API_BASE_URL"
     mastodon_access_token_env: str = "MASTODON_ACCESS_TOKEN"
 
@@ -48,14 +52,14 @@ def choose_random_unused_profession(professions_file: Path, used_words_file: Pat
         raise ValueError("Non ci sono più professioni disponibili: tutte le parole sono già in usati.txt")
 
     # Pick only from unused words so already-used entries are implicitly discarded.
-    chosen_word = random.choice(available_words)
+    return random.choice(available_words)
 
+
+def mark_profession_as_used(used_words_file: Path, word: str) -> None:
     with used_words_file.open("a", encoding="utf-8") as f:
-        if used_words_file.stat().st_size > 0:
+        if used_words_file.exists() and used_words_file.stat().st_size > 0:
             f.write("\n")
-        f.write(chosen_word)
-
-    return chosen_word
+        f.write(word)
 
 
 def build_toot_text(word: str) -> str:
@@ -161,6 +165,9 @@ def post_toot_with_media(status_text: str, image_path: Path, api_base_url: str, 
 
 
 def run(config: BotConfig) -> None:
+    # Load secrets/config from external .env before reading required vars.
+    load_dotenv(dotenv_path=config.env_file)
+
     word = choose_random_unused_profession(config.professions_file, config.used_words_file)
     toot_text = build_toot_text(word)
     output_image = build_output_path(word, config.output_dir)
@@ -174,12 +181,24 @@ def run(config: BotConfig) -> None:
 
     render_image_with_text(config.base_image, toot_text, output_image)
     post_toot_with_media(toot_text, output_image, api_base_url, access_token)
+    mark_profession_as_used(config.used_words_file, word)
 
 
-def main() -> None:
+def main() -> int:
     config = BotConfig()
-    run(config)
+
+    try:
+        run(config)
+        print("Toot pubblicato con successo.")
+        return 0
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Errore: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Errore inatteso: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
